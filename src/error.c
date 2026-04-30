@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <linux/limits.h>
+#include <limits.h>  /* Portable POSIX header for PATH_MAX (replaces Linux-specific <linux/limits.h>) */
 
 static char flogn[PATH_MAX];
 FILE *flog = NULL;

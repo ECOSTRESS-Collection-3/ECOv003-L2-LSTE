@@ -22,34 +22,130 @@
 #  -------      -----   ------          -----------
 #  05/03/16             R. Freepartner  Initial Version
 ###################################################################
+# Auto-detect conda env when CONDA_PREFIX is not exported (common in non-activated shells)
+DEFAULT_ENV_NAME ?= ECOv003-L2-LSTE
+CONDA_BASE_DETECTED := $(shell command -v conda >/dev/null 2>&1 && conda info --base 2>/dev/null || echo "")
+CONDA_PREFIX_DETECTED := $(shell \
+  if [ -n "$(CONDA_BASE_DETECTED)" ] && [ -d "$(CONDA_BASE_DETECTED)/envs/$(DEFAULT_ENV_NAME)" ]; then echo "$(CONDA_BASE_DETECTED)/envs/$(DEFAULT_ENV_NAME)"; \
+  elif [ -n "$(CONDA_PREFIX)" ]; then echo "$(CONDA_PREFIX)"; \
+  elif [ -d "/opt/homebrew/Caskroom/miniforge/base/envs/$(DEFAULT_ENV_NAME)" ]; then echo "/opt/homebrew/Caskroom/miniforge/base/envs/$(DEFAULT_ENV_NAME)"; \
+  fi)
 
-ifndef XMLINC
-XMLINC = 
+ifneq ($(CONDA_PREFIX_DETECTED),)
+CONDA_PREFIX := $(CONDA_PREFIX_DETECTED)
+export CONDA_PREFIX
+PKG_CONFIG_PATH := $(CONDA_PREFIX)/lib/pkgconfig:$(PKG_CONFIG_PATH)
+export PKG_CONFIG_PATH
 endif
 
-ifndef XMLLIB
-XMLLIB = 
+# Auto-discover dependencies using pkg-config
+# This makes the build portable across any system with installed packages
+
+PKG_CHECK = $(shell pkg-config --cflags $(1) 2>/dev/null)
+PKG_LIBS = $(shell pkg-config --libs $(1) 2>/dev/null)
+
+# Skip all dependency checks when running targets that don't need them
+CLEANING := $(filter clean clean_o clean_exe install,$(MAKECMDGOALS))
+ifneq ($(CLEANING),)
+HDFINC  :=
+HDFLIB  :=
+HDF5INC :=
+HDF5LIB :=
+XMLINC  :=
+XMLLIB  :=
+EXPATLIB :=
+GRIBINC :=
+GRIBLIB :=
+else
+
+# HDF4 (required) - provides hdf.h, mfhdf.h, hdfi.h
+# Try pkg-config first, then check conda/homebrew paths (HDF4 often doesn't have .pc file)
+HDF4_PREFIX := $(shell if [ -n "$$CONDA_PREFIX" ]; then echo $$CONDA_PREFIX; fi)
+ifeq ($(HDF4_PREFIX),)
+  HDF4_PREFIX := $(shell command -v brew >/dev/null 2>&1 && brew --prefix hdf4 2>/dev/null || echo "")
 endif
 
-ifndef HDFINC
-HDFINC = 
+ifeq ($(HDF4_PREFIX),)
+  HDFINC := $(call PKG_CHECK,hdf)
+  HDFLIB := $(call PKG_LIBS,hdf)
+else
+  HDFINC := -I$(HDF4_PREFIX)/include
+  HDFLIB := -L$(HDF4_PREFIX)/lib -lmfhdf -ldf
 endif
 
-ifndef HDFLIB
-HDFLIB = 
+ifeq ($(HDFINC),)
+$(error HDF4 not found. Use: conda create -n ecostress -c conda-forge hdf4 && conda activate ecostress)
 endif
 
-ifndef HDF5INC
-HDF5INC = 
+# HDF5 (required) - provides hdf5.h
+HDF5INC := $(call PKG_CHECK,hdf5)
+HDF5LIB := $(call PKG_LIBS,hdf5)
+ifeq ($(HDF5INC),)
+$(error HDF5 not found. Install with: brew install hdf5 (macOS) or apt-get install libhdf5-dev (Ubuntu))
 endif
 
-ifndef HDF5LIB
-HDF5LIB = 
+# LibXML2 (required) - provides libxml/xmlwriter.h
+# LibXML2 often doesn't provide .pc file in conda, so check conda/homebrew paths
+XMLINC := $(call PKG_CHECK,libxml-2.0)
+ifeq ($(XMLINC),)
+  # Try conda/homebrew paths
+  ifdef CONDA_PREFIX
+    XMLINC := -I$(CONDA_PREFIX)/include/libxml2
+    XMLLIB := -L$(CONDA_PREFIX)/lib -lxml2
+  else
+    XMLINC := $(shell if command -v brew >/dev/null 2>&1; then echo -I$$(brew --prefix libxml2)/include/libxml2; fi)
+    XMLLIB := $(shell if command -v brew >/dev/null 2>&1; then echo -L$$(brew --prefix libxml2)/lib -lxml2; fi)
+  endif
+endif
+ifeq ($(XMLINC),)
+$(error libxml2 not found. Use: conda create -n ecostress -c conda-forge hdf4 hdf5 libxml2 eccodes pkg-config && conda activate ecostress)
+endif
+XMLLIB_VAL := $(XMLLIB)
+ifeq ($(XMLLIB_VAL),)
+  XMLLIB_VAL := $(call PKG_LIBS,libxml2-2.0)
+endif
+ifeq ($(XMLLIB_VAL),)
+  XMLLIB_VAL := -lxml2
+endif
+XMLLIB := $(XMLLIB_VAL)
+
+# Expat (required) - provides expat.h
+# Expat often doesn't provide .pc file in conda, so check conda/homebrew paths
+EXPATLIB := $(call PKG_LIBS,expat)
+ifeq ($(EXPATLIB),)
+  # Try conda/homebrew paths
+  ifdef CONDA_PREFIX
+    EXPATLIB := -L$(CONDA_PREFIX)/lib -lexpat
+  else
+    EXPATLIB := $(shell if command -v brew >/dev/null 2>&1; then echo -L$$(brew --prefix expat)/lib -lexpat; fi)
+  endif
+endif
+ifeq ($(EXPATLIB),)
+$(error expat not found. Use: conda create -n ecostress -c conda-forge hdf4 hdf5 libxml2 eccodes pkg-config && conda activate ecostress)
 endif
 
-ifndef GRIBLIB
-GRIBLIB = 
+# GRIB API / ecCodes (required) - provides grib_api.h
+# Try ecCodes first (modern), fall back to grib_api (legacy)
+GRIBINC := $(call PKG_CHECK,eccodes)
+GRIBLIB := $(call PKG_LIBS,eccodes)
+ifeq ($(GRIBLIB),)
+  GRIBINC := $(call PKG_CHECK,grib_api)
+  GRIBLIB := $(call PKG_LIBS,grib_api)
 endif
+ifeq ($(GRIBLIB),)
+  # Fallback for conda setups where pkg-config lookup is unreliable
+  ifdef CONDA_PREFIX
+    ifneq ($(wildcard $(CONDA_PREFIX)/include/eccodes.h),)
+      GRIBINC := -I$(CONDA_PREFIX)/include
+      GRIBLIB := -L$(CONDA_PREFIX)/lib -leccodes
+    endif
+  endif
+endif
+ifeq ($(GRIBLIB),)
+$(error ecCodes/GRIB API not found. Install with: brew install eccodes (macOS) or apt-get install libeccodes-dev (Ubuntu))
+endif
+
+endif # ifneq ($(CLEANING),)
 
 ##################
 # EXPAT settings
@@ -70,69 +166,87 @@ else
 ADD_CFLAGS = -O3 -Wall
 endif
 
-# Object files
+BUILDDIR = ../build
+BINDIR  = ../bin
+
+# Object files (built into ../build/)
 TES_OBJ = \
-    tes_main.o \
-    asterged.o \
-    cloud.o \
-    config.o \
-    describe.o \
-    error.o \
-    fileio.o \
-    interps.o \
-    lste_lib.o \
-    matrix.o \
-    maptogrid.o \
-    metadata.o \
-    rttov_util.o \
-    smooth2d.o \
-    tes_util.o \
-    tg_wvs.o 
+    $(BUILDDIR)/tes_main.o \
+    $(BUILDDIR)/asterged.o \
+    $(BUILDDIR)/cloud.o \
+    $(BUILDDIR)/config.o \
+    $(BUILDDIR)/describe.o \
+    $(BUILDDIR)/error.o \
+    $(BUILDDIR)/fileio.o \
+    $(BUILDDIR)/interps.o \
+    $(BUILDDIR)/lste_lib.o \
+    $(BUILDDIR)/matrix.o \
+    $(BUILDDIR)/maptogrid.o \
+    $(BUILDDIR)/metadata.o \
+    $(BUILDDIR)/rttov_util.o \
+    $(BUILDDIR)/smooth2d.o \
+    $(BUILDDIR)/tes_util.o \
+    $(BUILDDIR)/tg_wvs.o
 
 ALLOBJ = $(TES_OBJ)
 
-# Combine the includes using pre-defined includes and your includes
-INC = -I. -I$(HDFINC) -I$(HDF5INC) -I$(XMLINC) -I/usr/include -I/project/test/rfreepar/include
-#INC = -I. -I$(HDFINC) -I$(HDF5INC) -I/usr/include -I/project/test/rfreepar/include
+# Combine the includes using pkg-config results
+INC = -I. -I../include $(HDFINC) $(HDF5INC) $(XMLINC) $(GRIBINC) -I/usr/include
 
-# Header files
-HDR = asterged.h \
-      cloud.h \
-      config.h \
-      describe.h \
-      fileio.h \
-      interps.h \
-      lste_lib.h \
-      maptogrid.h \
-      matrix.h \
-      metadata.h \
-      rttov_util.h \
-      smooth2d.h \
-      tes_util.h \
-      tg_wvs.h
+# Header files (now in ../include/)
+HDR = ../include/asterged.h \
+      ../include/cloud.h \
+      ../include/config.h \
+      ../include/describe.h \
+      ../include/fileio.h \
+      ../include/interps.h \
+      ../include/lste_lib.h \
+      ../include/maptogrid.h \
+      ../include/matrix.h \
+      ../include/metadata.h \
+      ../include/rttov_util.h \
+      ../include/smooth2d.h \
+      ../include/tes_util.h \
+      ../include/tg_wvs.h
       
-# Combine the libraries using pre-defined libraries and your library
-LIB = -L$(HDFLIB) -lmfhdf -L$(HDF5LIB) -lhdf5 -L$(GRIBLIB) -L$(XMLLIB) -lgrib_api -L/usr/lib -lxml2 -lexpat -ldl -ldf -ljpeg -lz -lm 
-#LIB = -L$(HDFLIB) -lmfhdf -L$(HDF5LIB) -lhdf5 -L$(GRIBLIB) -lgrib_api -L/usr/lib -lexpat -ldl -ldf -ljpeg -lz -lm 
+# Combine the libraries using pkg-config results
+LIB = $(HDFLIB) $(HDF5LIB) $(GRIBLIB) $(XMLLIB) $(EXPATLIB) -ldl -ldf -ljpeg -lz -lm 
 
-# Define executable name
-TARGET = L2_PGE	
+# Executable goes to ../bin/
+TARGET = $(BINDIR)/L2_PGE
 
-all:	$(TARGET)
-$(TARGET):	$(TES_OBJ) $(HDR)
-	 $(CC) $(ADD_CFLAGS) $(XP_DEFINES) $(TES_OBJ) $(LIB) -o $(TARGET)
+all: $(BUILDDIR) $(BINDIR) $(TARGET)
 
-.c.o:
+$(BUILDDIR):
+	mkdir -p $(BUILDDIR)
+
+$(BINDIR):
+	mkdir -p $(BINDIR)
+
+$(TARGET): $(TES_OBJ) $(HDR)
+	$(CC) $(ADD_CFLAGS) $(XP_DEFINES) $(TES_OBJ) $(LIB) -o $(TARGET)
+
+$(BUILDDIR)/%.o: %.c $(HDR)
 	$(CC) $(CFLAGS) $(ADD_CFLAGS) $(INC) -c $< -o $@
-	
+
 # Delete object files
 clean: clean_exe clean_o
 
 clean_o:
 	rm -f $(ALLOBJ)
 
-# Delete the executable file $TARGET
+# Delete the executable
 clean_exe:
 	rm -f $(TARGET)
+
+# Install the executable (default prefix: /usr/local, override with PREFIX=...)
+PREFIX ?= /usr/local
+install:
+	@if [ ! -f "$(TARGET)" ]; then \
+		echo "Error: $(TARGET) not found. Run 'make' first."; \
+		exit 1; \
+	fi
+	install -d $(DESTDIR)$(PREFIX)/bin
+	install -m 755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/
 
 ###################################################################

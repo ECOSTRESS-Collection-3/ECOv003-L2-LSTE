@@ -274,7 +274,8 @@ int loadMetadataHdf5(MetadataSet *set, hid_t obj_id)
     herr_t stat = 0;
     int readstat = 0;
     // Get number of attributes from info.
-    stat = H5Oget_info(obj_id, &obj_info);
+    // Note: HDF5 >= 1.12 requires H5O_INFO_ALL or similar as third parameter
+    stat = H5Oget_info(obj_id, &obj_info, H5O_INFO_ALL);
     if (stat < 0)
     {
         fprintf(stderr, "H5Oget_info fails to get info for h5 file metadata.\n");
