@@ -65,6 +65,11 @@ NWP ingest is performed directly before RTTOV profile preparation/execution, so 
 - **Implemented code**:
   - GEOS branch and GEOS file pattern matching (`src/tes_main.c`, `src/tes_util.c`; above)
   - Default ancillary pointer string uses GEOS FP style filename (`/tmp/workspace/ECOSTRESS-Collection-3/ECOv003-L2-LSTE/src/tes_main.c:317`)
+- **GEOS-5 FP data products and layers actually read**:
+  - Product files searched/read: GEOS 3-hourly `3d_asm_Np` NetCDF files matching `GEOS*3d_asm_Np*YYYYMMDD_hh00*.nc4` (`/tmp/workspace/ECOSTRESS-Collection-3/ECOv003-L2-LSTE/src/tes_util.c:1063-1065`).
+  - Two time-adjacent files are read per scene (before and after granule time), then interpolated (`/tmp/workspace/ECOSTRESS-Collection-3/ECOv003-L2-LSTE/src/tes_util.c:1139-1176`, `1202-1212`).
+  - Data layers read from each GEOS file: `lev`, `lat`, `lon`, `T`, `QV`, `PS` (`/tmp/workspace/ECOSTRESS-Collection-3/ECOv003-L2-LSTE/src/tes_util.c:1023-1035`).
+  - `tcw` is not directly read from GEOS in this path; if missing, TCW is derived later from humidity/pressure (`/tmp/workspace/ECOSTRESS-Collection-3/ECOv003-L2-LSTE/src/tes_main.c:1739-1758`).
 - **Sample/default config**:
   - Sample run config uses GEOS5 path (`/tmp/workspace/ECOSTRESS-Collection-3/ECOv003-L2-LSTE/config/sample_RunConfig.xml:11`)
 
